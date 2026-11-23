@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Transportlicom/car-shipping",
+  "title": "Transportli Car Shipping",
+  "description": "US car shipping: lowest, medium and highest price, real requests and carrier bids.",
+  "websiteUrl": "https://transportli.com/auto-transport/car-shipping-api/",
+  "repository": {
+    "url": "https://github.com/Transportlicom/transportli-mcp",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://app.transportli.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Optional. Your Transportli API key as 'Bearer tl_live_...' (use tl_test_... for the sandbox). Price estimates work without a key; creating requests and reading bids need one.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
