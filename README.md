@@ -1,5 +1,7 @@
 # Transportli car shipping MCP server
 
+[![Transportli Car Shipping MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/io.github.Transportlicom/car-shipping/badges/score.svg)](https://glama.ai/mcp/connectors/io.github.Transportlicom/car-shipping)
+
 [Model Context Protocol](https://modelcontextprotocol.io) server for the [Transportli car shipping API](https://transportli.com/auto-transport/car-shipping-api/). It lets an AI agent get a **lowest / medium / highest** car shipping price for any US route, create a **real shipping request**, and read the **real carrier bids**.
 
 It is a remote server: you do not run this code to use it. Connect your MCP client to:
