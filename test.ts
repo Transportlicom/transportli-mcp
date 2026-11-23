@@ -18,6 +18,7 @@ const fake = http.createServer(async (req, res) => {
 });
 await new Promise<void>((r) => fake.listen(3991, r));
 process.env.TL_API_BASE = 'http://localhost:3991';
+process.env.TL_PUBLIC_KEY = 'tl_test_' + 'p'.repeat(30); process.env.PUBLIC_PER_IP = '3';
 const { startServer } = await import('./server.ts');
 const mcpHttp = await startServer(3992);
 
@@ -62,5 +63,20 @@ assert.equal(nk.isError, true);
 // GET on /mcp is refused (stateless server)
 assert.equal((await fetch('http://localhost:3992/mcp')).status, 405);
 assert.equal((await fetch('http://localhost:3992/health')).status, 200);
+// keyless public endpoint: only the estimate tool, uses the internal key (never the caller's), per-IP limit
+const pub = new Client({ name: 'public-agent', version: '1' });
+await pub.connect(new StreamableHTTPClientTransport(new URL('http://localhost:3992/mcp/estimate')));
+const pt = (await pub.listTools()).tools;
+assert.deepEqual(pt.map((t) => t.name), ['estimate_car_shipping']);
+assert.equal(pt[0].annotations?.readOnlyHint, true); assert.ok(pt[0].title);
+const pe = await pub.callTool({ name: 'estimate_car_shipping', arguments: { pickup: { zip: '33101' }, delivery: { zip: '73301' } } });
+assert.ok(!pe.isError); assert.equal(text(pe).medium, 890); assert.equal(seen.at(-1)!.auth, 'Bearer ' + process.env.TL_PUBLIC_KEY);
+const hdr = await fetch('http://localhost:3992/mcp/estimate', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: 'Bearer tl_live_' + 'z'.repeat(30) }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'estimate_car_shipping', arguments: { pickup: { zip: '33101' }, delivery: { zip: '73301' } } } }) });
+assert.equal(hdr.status, 200); assert.equal(seen.at(-1)!.auth, 'Bearer ' + process.env.TL_PUBLIC_KEY, 'a caller-supplied key is ignored on the public endpoint');
+const lim = await pub.callTool({ name: 'estimate_car_shipping', arguments: { pickup: { zip: '33101' }, delivery: { zip: '73301' } } });  // 3rd call from this IP in the minute
+assert.ok(!lim.isError);
+const over = await pub.callTool({ name: 'estimate_car_shipping', arguments: { pickup: { zip: '33101' }, delivery: { zip: '73301' } } });
+assert.equal(over.isError, true); assert.equal(text(over).error.code, 'rate_limited');
+assert.equal((await fetch('http://localhost:3992/mcp/estimate')).status, 405);
 console.log('MCP server test passed');
 process.exit(0);

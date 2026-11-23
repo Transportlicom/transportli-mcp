@@ -3,6 +3,7 @@
  * It is a thin wrapper over the public API (app/api/v1). Remote MCP over HTTP (stateless Streamable HTTP) at POST /mcp.
  * The agent's API key is the Bearer token of the MCP connection and is forwarded to the API; estimates work without a key.
  *   TL_API_BASE=https://app.transportli.com PORT=3200 npx tsx server.ts
+ * Two endpoints: /mcp (all five tools, API key optional) and /mcp/estimate (keyless, the price estimate only).
  * Safety by design: no tool books, pays, or contacts carriers directly. Creating a request emails the customer to confirm first.
  */
 import http from 'node:http';
@@ -12,6 +13,18 @@ import { z } from 'zod';
 
 const API = (process.env.TL_API_BASE || 'https://app.transportli.com').replace(/\/$/, '');
 const PORT = Number(process.env.PORT || 3200);
+// Keyless public endpoint (POST /mcp/estimate): only the read-only price estimate, no account needed. It calls the API with an internal key
+// (TL_PUBLIC_KEY, sandbox mode, high per-minute limit) so that many agents behind one shared IP (e.g. a hosted AI client) are not throttled together;
+// abuse is limited here instead: a per-IP bucket in this process plus a global ceiling.
+const PUBLIC_KEY = process.env.TL_PUBLIC_KEY || undefined;
+const PUBLIC_PER_IP = Number(process.env.PUBLIC_PER_IP || 120), PUBLIC_GLOBAL = Number(process.env.PUBLIC_GLOBAL || 1500);
+const buckets = new Map<string, { n: number; reset: number }>();
+export function allow(bucket: string, max: number, now = Date.now()) {
+  const b = buckets.get(bucket);
+  if (!b || b.reset <= now) { buckets.set(bucket, { n: 1, reset: now + 60_000 }); return true; }
+  return ++b.n <= max;
+}
+setInterval(() => { const t = Date.now(); for (const [k, v] of buckets) if (v.reset <= t) buckets.delete(k); }, 60_000).unref();
 
 const place = z.object({
   zip: z.string().regex(/^\d{5}$/).optional().describe('5-digit US ZIP code'),
@@ -38,7 +51,7 @@ async function api(path: string, key: string | undefined, ip: string | undefined
 const out = (r: { ok: boolean; json: any }) => ({ content: [{ type: 'text' as const, text: JSON.stringify(r.json, null, 2) }], ...(r.ok ? {} : { isError: true }) });
 const needKey = { content: [{ type: 'text' as const, text: JSON.stringify({ error: { code: 'unauthorized', message: 'This tool needs a Transportli API key. Ask the user to get one at https://transportli.com/ and connect this server with it as the Bearer token.' } }) }], isError: true };
 
-export function buildServer(key: string | undefined, ip?: string) {
+export function buildServer(key: string | undefined, ip?: string, publicOnly = false) {
   const s = new McpServer({ name: 'transportli-car-shipping', version: '1.0.0' });
 
   s.registerTool('estimate_car_shipping', {
@@ -46,7 +59,12 @@ export function buildServer(key: string | undefined, ip?: string) {
     description: 'Price range for shipping a car in the US: lowest, medium and highest total price in US dollars, plus the distance. Based on Transportli lane data; an estimate, not a committed price. Use this to answer "how much does it cost to ship a car from A to B". Works without an API key.',
     inputSchema: { pickup: place, delivery: place, vehicles: z.array(vehicle).max(6).optional().describe('Default: one running sedan'), trailer: z.enum(['open', 'enclosed']).optional().describe('Default: open') },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async (a) => out(await api('/api/v1/estimates', key, ip, { method: 'POST', body: a })));
+  }, async (a) => {
+    if (publicOnly && !allow('ip:' + (ip ?? '?'), PUBLIC_PER_IP)) return out({ ok: false, json: { error: { code: 'rate_limited', message: `Too many estimates from this address. Try again in a minute (limit ${PUBLIC_PER_IP} per minute).` } } });
+    if (publicOnly && !allow('global', PUBLIC_GLOBAL)) return out({ ok: false, json: { error: { code: 'busy', message: 'The estimate service is busy. Try again in a minute.' } } });
+    return out(await api('/api/v1/estimates', key, ip, { method: 'POST', body: a }));
+  });
+  if (publicOnly) return s;
 
   s.registerTool('create_shipping_request', {
     title: 'Create a car shipping request',
@@ -88,7 +106,8 @@ export function startServer(port = PORT) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     if (url.pathname === '/health') { res.writeHead(200, { 'content-type': 'text/plain' }); return void res.end('ok'); }
-    if (url.pathname !== '/mcp') { res.writeHead(404); return void res.end('not found'); }
+    const publicOnly = url.pathname === '/mcp/estimate' || url.pathname === '/mcp/estimate/';
+    if (url.pathname !== '/mcp' && !publicOnly) { res.writeHead(404); return void res.end('not found'); }
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST', 'content-type': 'application/json' });
       return void res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed. This server is stateless: use POST.' }, id: null }));
@@ -98,7 +117,7 @@ export function startServer(port = PORT) {
     let body: unknown; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400); return void res.end('bad json'); }
     const m = /^Bearer\s+(tl_(?:test|live)_[A-Za-z0-9_-]{20,})$/.exec(String(req.headers.authorization ?? '').trim());
     const ip = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || undefined; // the real caller (Caddy sets X-Forwarded-For), so the API's per-IP limit is per agent, not shared
-    const mcp = buildServer(m?.[1], ip);
+    const mcp = buildServer(publicOnly ? PUBLIC_KEY : m?.[1], ip, publicOnly);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => { transport.close(); mcp.close(); });
     await mcp.connect(transport);

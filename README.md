@@ -10,7 +10,7 @@ It is a remote server: you do not run this code to use it. Connect your MCP clie
 https://app.transportli.com/mcp
 ```
 
-(streamable HTTP). The agent never books or pays anything: for a real request the customer confirms by email first and books a bid themselves.
+(streamable HTTP). For price estimates only, with no API key and a single tool, use `https://app.transportli.com/mcp/estimate` instead. The agent never books or pays anything: for a real request the customer confirms by email first and books a bid themselves.
 
 ## Tools
 
