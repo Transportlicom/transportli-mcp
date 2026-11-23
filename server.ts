@@ -26,7 +26,7 @@ export function allow(bucket: string, max: number, now = Date.now()) {
 }
 setInterval(() => { const t = Date.now(); for (const [k, v] of buckets) if (v.reset <= t) buckets.delete(k); }, 60_000).unref();
 
-const place = z.object({
+const place = () => z.object({
   zip: z.string().regex(/^\d{5}$/).optional().describe('5-digit US ZIP code'),
   city: z.string().max(80).optional(),
   state: z.string().length(2).optional().describe('2-letter state code, e.g. FL'),
@@ -57,8 +57,8 @@ export function buildServer(key: string | undefined, ip?: string, publicOnly = f
   s.registerTool('estimate_car_shipping', {
     title: 'Estimate car shipping price',
     description: 'Price range for shipping a car in the US: lowest, medium and highest total price in US dollars, plus the distance. Based on Transportli lane data; an estimate, not a committed price. Use this to answer "how much does it cost to ship a car from A to B". Works without an API key.',
-    inputSchema: { pickup: place, delivery: place, vehicles: z.array(vehicle).max(6).optional().describe('Default: one running sedan'), trailer: z.enum(['open', 'enclosed']).optional().describe('Default: open') },
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    inputSchema: { pickup: place(), delivery: place(), vehicles: z.array(vehicle).max(6).optional().describe('Default: one running sedan'), trailer: z.enum(['open', 'enclosed']).optional().describe('Default: open') },
+    annotations: { title: 'Estimate car shipping price', readOnlyHint: true, openWorldHint: false },
   }, async (a) => {
     if (publicOnly && !allow('ip:' + (ip ?? '?'), PUBLIC_PER_IP)) return out({ ok: false, json: { error: { code: 'rate_limited', message: `Too many estimates from this address. Try again in a minute (limit ${PUBLIC_PER_IP} per minute).` } } });
     if (publicOnly && !allow('global', PUBLIC_GLOBAL)) return out({ ok: false, json: { error: { code: 'busy', message: 'The estimate service is busy. Try again in a minute.' } } });
@@ -71,32 +71,32 @@ export function buildServer(key: string | undefined, ip?: string, publicOnly = f
     description: 'Creates a REAL shipping request that carriers can bid on. Call it only after the customer has confirmed the route, the vehicle and that we may use their email. The customer is emailed a confirmation link before carriers are alerted; nothing is booked or charged. Afterwards use get_quotes to read the real carrier prices. Needs an API key.',
     inputSchema: {
       customer: z.object({ first_name: z.string().min(1).max(60), last_name: z.string().max(60).optional(), email: z.string().email(), phone: z.string().max(25).optional() }),
-      pickup: place, delivery: place, vehicles: z.array(vehicle).min(1).max(6),
+      pickup: place(), delivery: place(), vehicles: z.array(vehicle).min(1).max(6),
       trailer: z.enum(['open', 'enclosed']).optional(), timing: z.enum(['asap', 'few_days', 'this_week', 'flexible']).optional(),
       pickup_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Preferred pickup date, YYYY-MM-DD'), notes: z.string().max(500).optional(),
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: { title: 'Create a car shipping request', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (a) => (key ? out(await api('/api/v1/requests', key, ip, { method: 'POST', body: a })) : needKey));
 
   s.registerTool('get_quotes', {
     title: 'Get carrier quotes',
     description: 'The real carrier bids for a request: each bid with the carrier name, rating, total price in US dollars, pickup window and transit days, plus the lowest, medium and highest bid so far. New bids arrive over minutes to hours; call again later. Needs an API key.',
     inputSchema: { request_id: z.string().regex(/^[A-Za-z0-9-]{4,32}$/).describe('The id returned by create_shipping_request, e.g. TL-K7M2PQ') },
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    annotations: { title: 'Get carrier quotes', readOnlyHint: true, openWorldHint: false },
   }, async ({ request_id }) => (key ? out(await api(`/api/v1/requests/${encodeURIComponent(request_id)}/quotes`, key, ip)) : needKey));
 
   s.registerTool('get_request', {
     title: 'Get a shipping request',
     description: 'Status of a request (awaiting_customer_confirmation, collecting_quotes, booked, cancelled...), its route, vehicles, the price estimate and the bids. Needs an API key.',
     inputSchema: { request_id: z.string().regex(/^[A-Za-z0-9-]{4,32}$/) },
-    annotations: { readOnlyHint: true, openWorldHint: false },
+    annotations: { title: 'Get a shipping request', readOnlyHint: true, openWorldHint: false },
   }, async ({ request_id }) => (key ? out(await api(`/api/v1/requests/${encodeURIComponent(request_id)}`, key, ip)) : needKey));
 
   s.registerTool('cancel_request', {
     title: 'Cancel a shipping request',
     description: 'Cancels a request that has not been booked. Only call it when the customer asked to cancel. Needs an API key.',
     inputSchema: { request_id: z.string().regex(/^[A-Za-z0-9-]{4,32}$/) },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    annotations: { title: 'Cancel a shipping request', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, async ({ request_id }) => (key ? out(await api(`/api/v1/requests/${encodeURIComponent(request_id)}/cancel`, key, ip, { method: 'POST' })) : needKey));
 
   return s;
